@@ -199,27 +199,38 @@ defmodule SoundboardWeb.AudioPlayer do
     # Get current channel for voice state fixing
     channel_id = case GenServer.call(__MODULE__, :get_voice_channel) do
       {^guild_id, channel_id} ->
-        Logger.info("Fixing voice state immediately before audio playbook")
+        Logger.info("Preparing audio for playback")
         fix_voice_state_for_audio(guild_id, channel_id)
-        
-        # Also ensure we're not suppressed at the Discord protocol level
         ensure_not_suppressed(guild_id, channel_id)
         channel_id
         
       _ ->
-        Logger.warning("No voice channel info available for voice state fix")
+        Logger.warning("No voice channel info available")
         nil
     end
 
-    # Check if we have multiple users in the channel - this changes our approach
+    # Check if we have multiple users in the channel - this changes our approach DRAMATICALLY
     user_count = if channel_id, do: count_users_in_channel(guild_id, channel_id), else: 1
+    Logger.info("Detected #{user_count} users in voice channel")
     
-    # Use different options for multi-user channels
-    play_options = get_play_options_for_user_count(user_count, play_type)
-    Logger.info("Play options for #{user_count} users: #{inspect(play_options)}")
-
-    # Keep track of attempts
-    play_with_retries(guild_id, play_input, play_type, play_options, sound_name, username, 0)
+    if user_count > 1 do
+      # SIMPLE APPROACH: For multi-user, use minimal changes but with better timing
+      Logger.info("Multi-user detected - using SIMPLE stable approach")
+      
+      # Just use very basic options - the issue might be overthinking it
+      simple_options = [volume: 0.8] # That's it - just lower volume
+      
+      # Give Discord a moment to settle after detecting multiple users
+      Process.sleep(1000)
+      
+      Logger.info("Playing with simple multi-user options: #{inspect(simple_options)}")
+      play_with_retries(guild_id, play_input, play_type, simple_options, sound_name, username, 0)
+    else
+      # Single user - use normal approach
+      Logger.info("Single user - using standard playback")
+      play_options = get_play_options_for_user_count(user_count, play_type)
+      play_with_retries(guild_id, play_input, play_type, play_options, sound_name, username, 0)
+    end
   end
 
   defp play_with_retries(
@@ -464,18 +475,19 @@ defmodule SoundboardWeb.AudioPlayer do
     base_options = [volume: 1.0]
     
     if user_count > 1 do
-      # Multi-user channel - use options optimized for Discord's multi-user behavior
-      Logger.info("Multi-user channel detected (#{user_count} users), using multi-user optimized options")
+      # Multi-user channel - use VERY aggressive options to prevent Discord suppression
+      Logger.info("Multi-user channel detected (#{user_count} users), using AGGRESSIVE multi-user options")
       
-      # For multi-user channels, avoid realtime flag as it can cause Discord to cut audio
-      # Instead, use options that ensure stable streaming
-      base_options ++ [
-        # Don't use realtime in multi-user as it can cause Discord to suppress the bot
+      # Try completely different approach for multi-user
+      [
+        # Force lower volume to avoid triggering Discord's auto-suppression
+        volume: 0.5,
+        # Force non-realtime to prevent Discord from treating this as "live" audio
         realtime: false,
-        # Use standard ffmpeg processing
+        # Use local processing to avoid network-related suppression
         use_local: true,
-        # Ensure consistent volume
-        volume: 0.8  # Slightly lower volume to prevent auto-suppression
+        # Try to force specific encoding that Discord handles better
+        executable: "ffmpeg"
       ]
     else
       # Single user - can use standard options
@@ -490,6 +502,84 @@ defmodule SoundboardWeb.AudioPlayer do
     Logger.debug("Ensuring audio compatibility for multi-user channel (guild: #{guild_id}, channel: #{channel_id})")
     # The real fix is in the play options, not API calls
     :ok
+  end
+
+  # AGGRESSIVE approach for multi-user channels - recreate voice connection
+  defp play_with_connection_recreation(guild_id, channel_id, play_input, play_type, sound_name, username) do
+    Logger.info("MULTI-USER STRATEGY: Recreating voice connection for stable audio")
+    
+    try do
+      # Step 1: Disconnect completely
+      Voice.leave_channel(guild_id)
+      Process.sleep(500)
+      
+      # Step 2: Rejoin with fresh connection
+      Voice.join_channel(guild_id, channel_id)
+      Process.sleep(1500) # Give more time for multi-user connections
+      
+      # Step 3: Verify connection is solid
+      if not Voice.ready?(guild_id) do
+        Logger.error("Voice connection not ready after recreation")
+        broadcast_error("Failed to establish stable voice connection")
+        return :error
+      end
+      
+      # Step 4: Use VERY conservative options for multi-user
+      multi_user_options = [
+        volume: 0.4,  # Very low to avoid suppression
+        realtime: false,
+        use_local: true,
+        executable: "ffmpeg"
+      ]
+      
+      Logger.info("Attempting multi-user playback with options: #{inspect(multi_user_options)}")
+      
+      # Step 5: Play with the recreated connection
+      case Voice.play(guild_id, play_input, play_type, multi_user_options) do
+        :ok ->
+          Logger.info("Multi-user audio playback started successfully")
+          track_play_if_needed(sound_name, username)
+          broadcast_success(sound_name, username)
+          
+          # Step 6: Monitor the playback and maintain connection
+          schedule_multi_user_monitoring(guild_id, sound_name)
+          :ok
+          
+        {:error, reason} ->
+          Logger.error("Multi-user playback failed: #{inspect(reason)}")
+          broadcast_error("Multi-user audio failed: #{reason}")
+          :error
+      end
+      
+    rescue
+      error ->
+        Logger.error("Connection recreation failed: #{inspect(error)}")
+        broadcast_error("Failed to recreate voice connection")
+        :error
+    end
+  end
+  
+  # Schedule monitoring for multi-user playback
+  defp schedule_multi_user_monitoring(guild_id, sound_name) do
+    # Check every 2 seconds to ensure audio is still playing
+    Process.send_after(self(), {:monitor_multi_user_playback, guild_id, sound_name, 0}, 2000)
+  end
+  
+  # Handle monitoring messages
+  def handle_info({:monitor_multi_user_playback, guild_id, sound_name, check_count}, state) when check_count < 10 do
+    if Voice.playing?(guild_id) do
+      Logger.debug("Multi-user playback still active for #{sound_name} (check #{check_count + 1})")
+      # Schedule next check
+      Process.send_after(self(), {:monitor_multi_user_playback, guild_id, sound_name, check_count + 1}, 2000)
+    else
+      Logger.info("Multi-user playback finished for #{sound_name}")
+    end
+    {:noreply, state}
+  end
+  
+  def handle_info({:monitor_multi_user_playback, _guild_id, sound_name, check_count}, state) do
+    Logger.info("Stopped monitoring #{sound_name} after #{check_count} checks")
+    {:noreply, state}
   end
 
   # Fix voice state for audio playback - focus on what actually works
