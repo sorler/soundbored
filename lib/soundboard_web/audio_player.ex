@@ -197,22 +197,26 @@ defmodule SoundboardWeb.AudioPlayer do
     Logger.info("Voice ready: #{Voice.ready?(guild_id)}, Playing: #{Voice.playing?(guild_id)}")
     
     # Get current channel for voice state fixing
-    case GenServer.call(__MODULE__, :get_voice_channel) do
+    channel_id = case GenServer.call(__MODULE__, :get_voice_channel) do
       {^guild_id, channel_id} ->
-        Logger.info("Fixing voice state immediately before audio playback")
+        Logger.info("Fixing voice state immediately before audio playbook")
         fix_voice_state_for_audio(guild_id, channel_id)
         
         # Also ensure we're not suppressed at the Discord protocol level
         ensure_not_suppressed(guild_id, channel_id)
+        channel_id
         
       _ ->
         Logger.warning("No voice channel info available for voice state fix")
+        nil
     end
 
-    # Don't use realtime flag for local files, it can cause issues
-    # Only use realtime for streaming/URL sources
-    play_options = [volume: 1.0]
-    Logger.info("Play options: #{inspect(play_options)}")
+    # Check if we have multiple users in the channel - this changes our approach
+    user_count = if channel_id, do: count_users_in_channel(guild_id, channel_id), else: 1
+    
+    # Use different options for multi-user channels
+    play_options = get_play_options_for_user_count(user_count, play_type)
+    Logger.info("Play options for #{user_count} users: #{inspect(play_options)}")
 
     # Keep track of attempts
     play_with_retries(guild_id, play_input, play_type, play_options, sound_name, username, 0)
@@ -363,14 +367,14 @@ defmodule SoundboardWeb.AudioPlayer do
         {path_or_url, :url}
 
       %{source_type: "local"} ->
-        # For local files, use raw path with :url type
-        # ffmpeg can read local files directly
-        Logger.info("Using raw path for local file with :url type")
+        # For local files, always use URL type for consistency
+        # The :path type can cause issues with multi-user voice channels
+        Logger.info("Using URL type for local file: #{path_or_url}")
         {path_or_url, :url}
 
       _ ->
-        # Default to raw path for unknown types (likely local files)
-        Logger.warning("Unknown source type, defaulting to raw path with :url type")
+        # Default to URL type for unknown types
+        Logger.warning("Unknown source type, defaulting to URL type")
         {path_or_url, :url}
     end
   end
@@ -433,6 +437,51 @@ defmodule SoundboardWeb.AudioPlayer do
       "soundboard",
       {:error, message}
     )
+  end
+
+  # Count users in the voice channel (excluding the bot)
+  defp count_users_in_channel(guild_id, channel_id) do
+    try do
+      case Nostrum.Cache.GuildCache.get(guild_id) do
+        {:ok, guild} ->
+          bot_id = case Nostrum.Api.Self.get() do
+            {:ok, %{id: id}} -> id
+            _ -> nil
+          end
+          
+          guild.voice_states
+          |> Enum.count(fn vs -> vs.channel_id == channel_id && vs.user_id != bot_id end)
+          
+        _ -> 1  # Default to single user if we can't check
+      end
+    rescue
+      _ -> 1  # Default to single user on error
+    end
+  end
+  
+  # Get play options based on number of users in channel
+  defp get_play_options_for_user_count(user_count, play_type) do
+    base_options = [volume: 1.0]
+    
+    if user_count > 1 do
+      # Multi-user channel - use options optimized for Discord's multi-user behavior
+      Logger.info("Multi-user channel detected (#{user_count} users), using multi-user optimized options")
+      
+      # For multi-user channels, avoid realtime flag as it can cause Discord to cut audio
+      # Instead, use options that ensure stable streaming
+      base_options ++ [
+        # Don't use realtime in multi-user as it can cause Discord to suppress the bot
+        realtime: false,
+        # Use standard ffmpeg processing
+        use_local: true,
+        # Ensure consistent volume
+        volume: 0.8  # Slightly lower volume to prevent auto-suppression
+      ]
+    else
+      # Single user - can use standard options
+      Logger.info("Single user channel, using standard options")
+      base_options
+    end
   end
 
   # Ensure the bot is not suppressed - this is critical for multi-user channels
