@@ -260,28 +260,28 @@ defmodule SoundboardWeb.AudioPlayer do
   end
 
   defp play_with_retries(
-         _guild_id,
-         _play_input,
-         _play_type,
-         _play_options,
-         sound_name,
-         _username,
-         attempt
-       ) do
+        _guild_id,
+        _play_input,
+        _play_type,
+        _play_options,
+        sound_name,
+        _username,
+        attempt
+      ) do
     Logger.error("Exceeded max retries (#{attempt}) for playing #{sound_name}")
     broadcast_error("Failed to play sound after multiple attempts")
     :error
   end
 
   defp handle_voice_reconnect(
-         guild_id,
-         play_input,
-         play_type,
-         play_options,
-         sound_name,
-         username,
-         attempt
-       ) do
+        guild_id,
+        play_input,
+        play_type,
+        play_options,
+        sound_name,
+        username,
+        attempt
+      ) do
     # Get the channel from state
     case GenServer.call(__MODULE__, :get_voice_channel) do
       {^guild_id, channel_id} ->
@@ -376,6 +376,8 @@ defmodule SoundboardWeb.AudioPlayer do
   defp ensure_voice_ready(guild_id, channel_id) do
     if Voice.ready?(guild_id) do
       Logger.info("Voice connection ready for guild #{guild_id}")
+      # Ensure voice state is correct even when ready
+      fix_voice_state_for_audio(guild_id, channel_id)
       true
     else
       Logger.info("Voice not ready, attempting to join channel #{channel_id}")
@@ -418,6 +420,42 @@ defmodule SoundboardWeb.AudioPlayer do
       "soundboard",
       {:error, message}
     )
+  end
+
+  # Fix voice state for audio playback - similar to DiscordHandler but focused on audio
+  defp fix_voice_state_for_audio(guild_id, channel_id) do
+    try do
+      case Nostrum.Api.Self.get() do
+        {:ok, %{id: bot_id}} ->
+          Logger.debug("Ensuring bot voice state is correct for audio playback")
+          
+          # Try to fix voice state to ensure audio can be heard
+          case Nostrum.Api.modify_current_user_voice_state(guild_id, %{
+            channel_id: channel_id,
+            suppress: false,
+            self_mute: false,
+            self_deaf: false
+          }) do
+            {:ok} ->
+              Logger.debug("Voice state updated for audio")
+              :ok
+              
+            {:error, _} ->
+              # Fallback: try guild member modification
+              case Nostrum.Api.modify_guild_member(guild_id, bot_id, %{
+                mute: false,
+                deaf: false
+              }) do
+                {:ok, _} -> :ok
+                {:error, _} -> :ok  # Don't fail audio playback if this doesn't work
+              end
+          end
+          
+        {:error, _} -> :ok  # Don't fail audio playback if we can't get bot info
+      end
+    rescue
+      _ -> :ok  # Don't fail audio playback due to voice state issues
+    end
   end
 
   defp get_sound_path(sound_name) do
