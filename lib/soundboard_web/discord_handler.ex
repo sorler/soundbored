@@ -249,9 +249,14 @@ defmodule SoundboardWeb.DiscordHandler do
         Logger.info(
           "BOT VOICE STATE UPDATE - Bot (#{bot_id}) joined channel #{payload.channel_id} in guild #{payload.guild_id}"
         )
+        # When bot's own voice state updates, ensure it's not suppressed
+        if payload.channel_id do
+          Process.send_after(self(), {:fix_bot_voice_state, payload.guild_id, payload.channel_id}, 500)
+        end
 
       _ ->
-        :ok
+        # When another user joins/leaves, check if we need to fix bot's voice state
+        check_and_fix_bot_voice_state_on_user_change(payload)
     end
 
     previous_state = State.get_state(payload.user_id)
@@ -319,6 +324,18 @@ defmodule SoundboardWeb.DiscordHandler do
           Message.create(msg.channel_id, "Left the voice channel!")
         end
 
+      "!fixvoice" ->
+        if msg.guild_id do
+          case get_current_voice_channel() do
+            {guild_id, channel_id} when guild_id == msg.guild_id ->
+              Logger.info("Manual voice fix requested by user")
+              fix_voice_state(guild_id, channel_id)
+              Message.create(msg.channel_id, "Attempting to fix voice state for better audio...")
+            _ ->
+              Message.create(msg.channel_id, "Bot is not in a voice channel in this server.")
+          end
+        end
+
       _ ->
         :ignore
     end
@@ -362,6 +379,13 @@ defmodule SoundboardWeb.DiscordHandler do
     {:noreply, state}
   end
 
+  # Handle fixing bot voice state after user changes
+  def handle_info({:fix_bot_voice_state, guild_id, channel_id}, state) do
+    Logger.info("Fixing bot voice state after user change: guild #{guild_id}, channel #{channel_id}")
+    fix_voice_state(guild_id, channel_id)
+    {:noreply, state}
+  end
+
   # Catch-all for other info messages
   def handle_info(_msg, state), do: {:noreply, state}
 
@@ -387,6 +411,36 @@ defmodule SoundboardWeb.DiscordHandler do
     _ -> nil
   end
 
+  # Check if we need to fix bot voice state when users join/leave
+  defp check_and_fix_bot_voice_state_on_user_change(payload) do
+    case get_current_voice_channel() do
+      {guild_id, channel_id} when guild_id == payload.guild_id ->
+        # If user joined the same channel as bot, or left the channel
+        cond do
+          payload.channel_id == channel_id ->
+            Logger.info("User joined bot's channel - fixing voice state in 1 second")
+            Process.send_after(self(), {:fix_bot_voice_state, guild_id, channel_id}, 1000)
+            
+          # User left the channel the bot is in (payload.channel_id is nil means they left)
+          is_nil(payload.channel_id) ->
+            # Check if they were in bot's channel before
+            case State.get_state(payload.user_id) do
+              {^channel_id, _} ->
+                Logger.info("User left bot's channel - fixing voice state in 500ms")
+                Process.send_after(self(), {:fix_bot_voice_state, guild_id, channel_id}, 500)
+              _ ->
+                :noop
+            end
+            
+          true ->
+            :noop
+        end
+        
+      _ ->
+        :noop
+    end
+  end
+
   # Fix voice state to ensure bot can be heard properly
   defp fix_voice_state(guild_id, channel_id) do
     try do
@@ -405,6 +459,8 @@ defmodule SoundboardWeb.DiscordHandler do
           }) do
             {:ok} ->
               Logger.info("Successfully updated bot voice state")
+              # Also try to request speaker permissions if needed
+              request_speaker_permissions(guild_id, channel_id, bot_id)
               :ok
               
             {:error, reason} ->
@@ -416,6 +472,7 @@ defmodule SoundboardWeb.DiscordHandler do
               }) do
                 {:ok, _} ->
                   Logger.info("Successfully updated bot guild member voice state")
+                  request_speaker_permissions(guild_id, channel_id, bot_id)
                   :ok
                 {:error, alt_reason} ->
                   Logger.warning("Failed to update guild member voice state: #{inspect(alt_reason)}")
@@ -431,6 +488,24 @@ defmodule SoundboardWeb.DiscordHandler do
       error ->
         Logger.error("Error fixing voice state: #{inspect(error)}")
         :error
+    end
+  end
+
+  # Request speaker permissions for stage channels or priority speaker status
+  defp request_speaker_permissions(guild_id, channel_id, bot_id) do
+    try do
+      # Try to request to speak (useful for stage channels)
+      case Nostrum.Api.modify_current_user_voice_state(guild_id, %{
+        channel_id: channel_id,
+        request_to_speak_timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+      }) do
+        {:ok} ->
+          Logger.debug("Requested speaker permissions")
+        {:error, _} ->
+          Logger.debug("Could not request speaker permissions (might not be a stage channel)")
+      end
+    rescue
+      _ -> :ok  # Don't fail if this doesn't work
     end
   end
 

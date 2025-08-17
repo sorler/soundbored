@@ -195,6 +195,19 @@ defmodule SoundboardWeb.AudioPlayer do
 
     # Check voice state
     Logger.info("Voice ready: #{Voice.ready?(guild_id)}, Playing: #{Voice.playing?(guild_id)}")
+    
+    # Get current channel for voice state fixing
+    case GenServer.call(__MODULE__, :get_voice_channel) do
+      {^guild_id, channel_id} ->
+        Logger.info("Fixing voice state immediately before audio playback")
+        fix_voice_state_for_audio(guild_id, channel_id)
+        
+        # Also ensure we're not suppressed at the Discord protocol level
+        ensure_not_suppressed(guild_id, channel_id)
+        
+      _ ->
+        Logger.warning("No voice channel info available for voice state fix")
+    end
 
     # Don't use realtime flag for local files, it can cause issues
     # Only use realtime for streaming/URL sources
@@ -420,6 +433,43 @@ defmodule SoundboardWeb.AudioPlayer do
       "soundboard",
       {:error, message}
     )
+  end
+
+  # Ensure the bot is not suppressed - this is critical for multi-user channels
+  defp ensure_not_suppressed(guild_id, channel_id) do
+    try do
+      case Nostrum.Api.Self.get() do
+        {:ok, %{id: bot_id}} ->
+          # Force unsuppress the bot - this is often the root cause
+          case Nostrum.Api.modify_current_user_voice_state(guild_id, %{
+            channel_id: channel_id,
+            suppress: false
+          }) do
+            {:ok} ->
+              Logger.info("Successfully unsuppressed bot for audio playback")
+              
+              # Double-check by also trying guild member modification
+              case Nostrum.Api.modify_guild_member(guild_id, bot_id, %{
+                mute: false,
+                deaf: false
+              }) do
+                {:ok, _} ->
+                  Logger.debug("Also updated guild member voice state")
+                {:error, reason} ->
+                  Logger.debug("Guild member modification failed but continuing: #{inspect(reason)}")
+              end
+              
+            {:error, reason} ->
+              Logger.warning("Failed to unsuppress bot: #{inspect(reason)}")
+          end
+          
+        {:error, reason} ->
+          Logger.warning("Could not get bot info for unsuppression: #{inspect(reason)}")
+      end
+    rescue
+      error ->
+        Logger.warning("Error in unsuppression: #{inspect(error)}")
+    end
   end
 
   # Fix voice state for audio playback - similar to DiscordHandler but focused on audio
