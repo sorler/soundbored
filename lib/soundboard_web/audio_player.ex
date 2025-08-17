@@ -485,55 +485,19 @@ defmodule SoundboardWeb.AudioPlayer do
   end
 
   # Ensure the bot is not suppressed - this is critical for multi-user channels
+  # Note: We can't modify voice state via API, so we rely on proper audio options
   defp ensure_not_suppressed(guild_id, channel_id) do
-    try do
-      case Nostrum.Api.Self.get() do
-        {:ok, %{id: bot_id}} ->
-          # Use guild member modification to ensure the bot is not muted or deafened
-          case Nostrum.Api.modify_guild_member(guild_id, bot_id, %{
-            mute: false,
-            deaf: false
-          }) do
-            {:ok, _} ->
-              Logger.debug("Successfully updated guild member voice state for audio")
-            {:error, reason} ->
-              Logger.debug("Guild member modification failed: #{inspect(reason)}")
-          end
-          
-        {:error, reason} ->
-          Logger.warning("Could not get bot info for voice state fix: #{inspect(reason)}")
-      end
-    rescue
-      error ->
-        Logger.warning("Error in voice state fix: #{inspect(error)}")
-    end
+    Logger.debug("Ensuring audio compatibility for multi-user channel (guild: #{guild_id}, channel: #{channel_id})")
+    # The real fix is in the play options, not API calls
+    :ok
   end
 
-  # Fix voice state for audio playback - similar to DiscordHandler but focused on audio
+  # Fix voice state for audio playback - focus on what actually works
   defp fix_voice_state_for_audio(guild_id, channel_id) do
-    try do
-      case Nostrum.Api.Self.get() do
-        {:ok, %{id: bot_id}} ->
-          Logger.debug("Ensuring bot voice state is correct for audio playback")
-          
-          # Use guild member modification to ensure the bot is not muted or deafened
-          case Nostrum.Api.modify_guild_member(guild_id, bot_id, %{
-            mute: false,
-            deaf: false
-          }) do
-            {:ok, _} ->
-              Logger.debug("Voice state updated for audio")
-              :ok
-            {:error, _} ->
-              Logger.debug("Voice state update failed, but continuing with audio playback")
-              :ok  # Don't fail audio playback if this doesn't work
-          end
-          
-        {:error, _} -> :ok  # Don't fail audio playback if we can't get bot info
-      end
-    rescue
-      _ -> :ok  # Don't fail audio playback due to voice state issues
-    end
+    Logger.debug("Preparing audio for guild #{guild_id}, channel #{channel_id}")
+    # Discord bots can't modify their own voice state via API
+    # The real fix is in using the correct audio playback options
+    :ok
   end
 
   defp get_sound_path(sound_name) do

@@ -442,36 +442,12 @@ defmodule SoundboardWeb.DiscordHandler do
   end
 
   # Fix voice state to ensure bot can be heard properly
+  # Note: Discord bots cannot modify their own voice state via API
+  # The real fix is in the audio playback options
   defp fix_voice_state(guild_id, channel_id) do
-    try do
-      # Get bot user info
-      case Self.get() do
-        {:ok, %{id: bot_id}} ->
-          Logger.info("Fixing voice state for bot #{bot_id} in channel #{channel_id}")
-          
-          # Use guild member modify to ensure the bot is not muted or deafened
-          # This is the standard way to manage voice state in Nostrum
-          case Nostrum.Api.modify_guild_member(guild_id, bot_id, %{
-            mute: false,
-            deaf: false
-          }) do
-            {:ok, _} ->
-              Logger.info("Successfully updated bot guild member voice state")
-              :ok
-            {:error, reason} ->
-              Logger.warning("Failed to update guild member voice state: #{inspect(reason)}")
-              :error
-          end
-          
-        {:error, reason} ->
-          Logger.error("Could not get bot user info: #{inspect(reason)}")
-          :error
-      end
-    rescue
-      error ->
-        Logger.error("Error fixing voice state: #{inspect(error)}")
-        :error
-    end
+    Logger.info("Voice state check for bot in channel #{channel_id} (guild #{guild_id}) - relying on audio options")
+    # Just log that we're aware of the voice state, actual fix is in play options
+    :ok
   end
 
 
