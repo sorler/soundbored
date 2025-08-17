@@ -489,35 +489,23 @@ defmodule SoundboardWeb.AudioPlayer do
     try do
       case Nostrum.Api.Self.get() do
         {:ok, %{id: bot_id}} ->
-          # Force unsuppress the bot - this is often the root cause
-          case Nostrum.Api.modify_current_user_voice_state(guild_id, %{
-            channel_id: channel_id,
-            suppress: false
+          # Use guild member modification to ensure the bot is not muted or deafened
+          case Nostrum.Api.modify_guild_member(guild_id, bot_id, %{
+            mute: false,
+            deaf: false
           }) do
-            {:ok} ->
-              Logger.info("Successfully unsuppressed bot for audio playback")
-              
-              # Double-check by also trying guild member modification
-              case Nostrum.Api.modify_guild_member(guild_id, bot_id, %{
-                mute: false,
-                deaf: false
-              }) do
-                {:ok, _} ->
-                  Logger.debug("Also updated guild member voice state")
-                {:error, reason} ->
-                  Logger.debug("Guild member modification failed but continuing: #{inspect(reason)}")
-              end
-              
+            {:ok, _} ->
+              Logger.debug("Successfully updated guild member voice state for audio")
             {:error, reason} ->
-              Logger.warning("Failed to unsuppress bot: #{inspect(reason)}")
+              Logger.debug("Guild member modification failed: #{inspect(reason)}")
           end
           
         {:error, reason} ->
-          Logger.warning("Could not get bot info for unsuppression: #{inspect(reason)}")
+          Logger.warning("Could not get bot info for voice state fix: #{inspect(reason)}")
       end
     rescue
       error ->
-        Logger.warning("Error in unsuppression: #{inspect(error)}")
+        Logger.warning("Error in voice state fix: #{inspect(error)}")
     end
   end
 
@@ -528,26 +516,17 @@ defmodule SoundboardWeb.AudioPlayer do
         {:ok, %{id: bot_id}} ->
           Logger.debug("Ensuring bot voice state is correct for audio playback")
           
-          # Try to fix voice state to ensure audio can be heard
-          case Nostrum.Api.modify_current_user_voice_state(guild_id, %{
-            channel_id: channel_id,
-            suppress: false,
-            self_mute: false,
-            self_deaf: false
+          # Use guild member modification to ensure the bot is not muted or deafened
+          case Nostrum.Api.modify_guild_member(guild_id, bot_id, %{
+            mute: false,
+            deaf: false
           }) do
-            {:ok} ->
+            {:ok, _} ->
               Logger.debug("Voice state updated for audio")
               :ok
-              
             {:error, _} ->
-              # Fallback: try guild member modification
-              case Nostrum.Api.modify_guild_member(guild_id, bot_id, %{
-                mute: false,
-                deaf: false
-              }) do
-                {:ok, _} -> :ok
-                {:error, _} -> :ok  # Don't fail audio playback if this doesn't work
-              end
+              Logger.debug("Voice state update failed, but continuing with audio playback")
+              :ok  # Don't fail audio playback if this doesn't work
           end
           
         {:error, _} -> :ok  # Don't fail audio playback if we can't get bot info

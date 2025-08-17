@@ -449,35 +449,18 @@ defmodule SoundboardWeb.DiscordHandler do
         {:ok, %{id: bot_id}} ->
           Logger.info("Fixing voice state for bot #{bot_id} in channel #{channel_id}")
           
-          # Update voice state to ensure the bot is not muted, deafened, or suppressed
-          # This is crucial for multi-user voice channels where Discord might suppress the bot
-          case Nostrum.Api.modify_current_user_voice_state(guild_id, %{
-            channel_id: channel_id,
-            suppress: false,
-            self_mute: false,
-            self_deaf: false
+          # Use guild member modify to ensure the bot is not muted or deafened
+          # This is the standard way to manage voice state in Nostrum
+          case Nostrum.Api.modify_guild_member(guild_id, bot_id, %{
+            mute: false,
+            deaf: false
           }) do
-            {:ok} ->
-              Logger.info("Successfully updated bot voice state")
-              # Also try to request speaker permissions if needed
-              request_speaker_permissions(guild_id, channel_id, bot_id)
+            {:ok, _} ->
+              Logger.info("Successfully updated bot guild member voice state")
               :ok
-              
             {:error, reason} ->
-              Logger.warning("Failed to update bot voice state: #{inspect(reason)}")
-              # Try alternative approach using guild member modify
-              case Nostrum.Api.modify_guild_member(guild_id, bot_id, %{
-                mute: false,
-                deaf: false
-              }) do
-                {:ok, _} ->
-                  Logger.info("Successfully updated bot guild member voice state")
-                  request_speaker_permissions(guild_id, channel_id, bot_id)
-                  :ok
-                {:error, alt_reason} ->
-                  Logger.warning("Failed to update guild member voice state: #{inspect(alt_reason)}")
-                  :error
-              end
+              Logger.warning("Failed to update guild member voice state: #{inspect(reason)}")
+              :error
           end
           
         {:error, reason} ->
@@ -491,23 +474,6 @@ defmodule SoundboardWeb.DiscordHandler do
     end
   end
 
-  # Request speaker permissions for stage channels or priority speaker status
-  defp request_speaker_permissions(guild_id, channel_id, bot_id) do
-    try do
-      # Try to request to speak (useful for stage channels)
-      case Nostrum.Api.modify_current_user_voice_state(guild_id, %{
-        channel_id: channel_id,
-        request_to_speak_timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
-      }) do
-        {:ok} ->
-          Logger.debug("Requested speaker permissions")
-        {:error, _} ->
-          Logger.debug("Could not request speaker permissions (might not be a stage channel)")
-      end
-    rescue
-      _ -> :ok  # Don't fail if this doesn't work
-    end
-  end
 
   # Add this helper function
   defp check_and_join_voice(guild) do
