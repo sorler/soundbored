@@ -58,6 +58,10 @@ RUN set -xe \
 WORKDIR /app
 COPY . .
 
+# Copy and set up entrypoint script
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 # Install hex and rebar and get dependencies
 RUN mix local.hex --force && \
     mix local.rebar --force && \
@@ -99,42 +103,8 @@ RUN export SECRET_KEY_BASE=$(cat /app/.secret_key_base) && \
     mix assets.setup && \
     mix assets.deploy
 
-# Create entrypoint script
-RUN cat > /app/entrypoint.sh << 'EOF'
-#!/bin/bash
-set -e
-
-# Debug information
-echo "=== Starting entrypoint script ==="
-echo "Current directory: $(pwd)"
-echo "Environment variables:"
-env | grep -v "SECRET"
-
-# Set up environment
-export SECRET_KEY_BASE=$(cat /app/.secret_key_base)
-echo "Secret key base is configured (length: ${#SECRET_KEY_BASE} bytes)"
-
-# Make sure the uploads directory exists
-mkdir -p /app/priv/static/uploads
-
-# Setup database directory
-DBDIR=/app/priv/static/uploads
-mkdir -p "$DBDIR"
-chmod 777 "$DBDIR"
-
-# Setup the database (create if not exists)
-echo "Setting up database..."
-# Using ecto.setup instead of just migrate to ensure the DB is created
-mix ecto.setup || (echo "Database setup failed, retrying with migrate only" && mix ecto.migrate)
-
-# Start Phoenix server in foreground
-echo "Starting Phoenix server..."
-exec mix phx.server
-EOF
-
-# Make the entrypoint script executable and verify it exists
-RUN chmod +x /app/entrypoint.sh && \
-    ls -la /app/entrypoint.sh && \
+# Verify the entrypoint script exists and is executable
+RUN ls -la /app/entrypoint.sh && \
     head -5 /app/entrypoint.sh
 
 # Configure shell and entrypoint
