@@ -118,11 +118,37 @@ defmodule SoundboardWeb.DiscordHandler do
   defp join_voice_channel(guild_id, channel_id) do
     if connected_to_discord?() do
       Logger.info("Bot joining voice channel #{channel_id} in guild #{guild_id}")
+      
+      # Check if we're already in the same channel
+      case get_current_voice_channel() do
+        {^guild_id, ^channel_id} ->
+          Logger.info("Bot already in target channel #{channel_id}, checking connection health")
+          
+          # Verify the voice connection is still healthy
+          if Voice.ready?(guild_id) do
+            Logger.info("Voice connection healthy, no action needed")
+            :already_connected
+          else
+            Logger.warning("Voice connection unhealthy, will rejoin")
+          end
+        
+        {^guild_id, other_channel_id} when not is_nil(other_channel_id) ->
+          Logger.info("Bot moving from channel #{other_channel_id} to #{channel_id}")
+          # First leave the current channel
+          leave_voice_channel(guild_id)
+          Process.sleep(1000)  # Give Discord time to process the leave
+          
+        _ ->
+          Logger.info("Bot joining new voice channel")
+      end
+      
       Process.put(:current_voice_channel, {guild_id, channel_id})
 
       # Add rate limit protection
       try do
         Voice.join_channel(guild_id, channel_id)
+        # Give connection time to stabilize before continuing
+        Process.sleep(1500)
       rescue
         e ->
           error_msg = Exception.message(e)
@@ -136,10 +162,15 @@ defmodule SoundboardWeb.DiscordHandler do
 
             Process.sleep(5000)
             Voice.join_channel(guild_id, channel_id)
+            Process.sleep(1500)  # Stabilization time after retry
+          else
+            # Clear the process state if join failed
+            Process.delete(:current_voice_channel)
+            raise e
           end
       end
 
-      # Update AudioPlayer
+      # Update AudioPlayer only after successful join
       GenServer.cast(
         SoundboardWeb.AudioPlayer,
         {:set_voice_channel, guild_id, channel_id}

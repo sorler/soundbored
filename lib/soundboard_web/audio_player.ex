@@ -15,7 +15,7 @@ defmodule SoundboardWeb.AudioPlayer do
     @moduledoc """
     The state of the audio player.
     """
-    defstruct [:voice_channel, :current_playback]
+    defstruct [:voice_channel, :current_playback, :last_play_time]
   end
 
   # Client API
@@ -47,11 +47,10 @@ defmodule SoundboardWeb.AudioPlayer do
 
   # Server Callbacks
   @impl true
-  def init(state) do
-    Logger.info("Initializing AudioPlayer with state: #{inspect(state)}")
-    # Schedule periodic voice connection check
+  def init(_state) do
+    Logger.info(\"Initializing AudioPlayer...\")
     schedule_voice_check()
-    {:ok, state}
+    {:ok, %State{voice_channel: nil, current_playback: nil}}
   end
 
   @impl true
@@ -289,19 +288,32 @@ defmodule SoundboardWeb.AudioPlayer do
 
         # Voice.join_channel returns :ok or crashes (no_return)
         try do
+          # First try to leave the channel to reset the connection
+          Voice.leave_channel(guild_id)
+          Process.sleep(1000)  # Give Discord time to process the leave
+          
+          # Now rejoin the channel
           Voice.join_channel(guild_id, channel_id)
-          # Give it more time to fully connect
+          
+          # Give it more time to fully connect and stabilize
           Process.sleep(2000)
 
-          play_with_retries(
-            guild_id,
-            play_input,
-            play_type,
-            play_options,
-            sound_name,
-            username,
-            attempt + 1
-          )
+          if Voice.ready?(guild_id) do
+            Logger.info("Voice reconnection successful, attempting to play sound again")
+            play_with_retries(
+              guild_id,
+              play_input,
+              play_type,
+              play_options,
+              sound_name,
+              username,
+              attempt + 1
+            )
+          else
+            Logger.error("Voice reconnection failed - connection not ready after join")
+            broadcast_error("Could not re-establish voice connection")
+            :error
+          end
         rescue
           error ->
             Logger.error("Failed to rejoin voice channel: #{inspect(error)}")
@@ -335,8 +347,8 @@ defmodule SoundboardWeb.AudioPlayer do
   end
 
   defp schedule_voice_check do
-    # Check voice connection every 30 seconds
-    Process.send_after(self(), :check_voice_connection, 30_000)
+    # Check voice connection every 60 seconds to reduce overhead
+    Process.send_after(self(), :check_voice_connection, 60_000)
   end
 
   defp prepare_play_input(sound_name, path_or_url) do
