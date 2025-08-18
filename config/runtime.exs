@@ -32,13 +32,13 @@ if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||
-      File.read!("/app/.secret_key_base") ||
+      (if File.exists?("/app/.secret_key_base"), do: File.read!("/app/.secret_key_base"), else: nil) ||
       raise """
       environment variable SECRET_KEY_BASE is missing and no fallback file found.
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || raise "PHX_HOST must be set"
+  host = System.get_env("PHX_HOST") || "localhost"
   scheme = System.get_env("SCHEME") || "https"
   callback_url = "#{scheme}://#{host}/auth/discord/callback"
 
@@ -79,16 +79,18 @@ if config_env() == :prod do
     redirect_uri: callback_url
 
   # Remove duplicate ffmpeg check and consolidate Nostrum config
-  discord_token =
-    System.get_env("DISCORD_TOKEN") ||
-      raise """
-      environment variable DISCORD_TOKEN is missing.
-      Please set your Discord bot token.
-      """
-
-  # Store token for application use (bot will fetch it from here)
-  config :soundboard,
-    discord_token: discord_token
+  discord_token = System.get_env("DISCORD_TOKEN")
+  
+  if discord_token do
+    # Store token for application use (bot will fetch it from here)
+    config :soundboard,
+      discord_token: discord_token
+  else
+    # During build time, Discord token might not be available
+    # This will be handled at runtime
+    config :soundboard,
+      discord_token: nil
+  end
 
   # Configure ffmpeg path for Nostrum
   case System.cmd("which", ["ffmpeg"]) do

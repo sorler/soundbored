@@ -73,23 +73,32 @@ RUN bash -c '\
         echo "Using provided SECRET_KEY_BASE"; \
         echo "$SECRET_KEY_BASE" > /app/.secret_key_base; \
     fi && \
-    chmod 600 /app/.secret_key_base && \
-    export SECRET_KEY_BASE=$(cat /app/.secret_key_base) && \
+    chmod 600 /app/.secret_key_base'
+
+# Set build-time environment variables for compilation
+ENV PHX_HOST=localhost \
+    SCHEME=http \
+    MIX_ENV=prod
+
+# Compile the application without running database operations
+RUN export SECRET_KEY_BASE=$(cat /app/.secret_key_base) && \
     echo "SECRET_KEY_BASE length: ${#SECRET_KEY_BASE} bytes" && \
-    mix setup && \
-    mix assets.deploy'
+    mix compile
+
+# Install Node.js for asset compilation
+RUN apk add --no-cache nodejs npm
+
+# Install and setup assets (no database required)
+RUN export SECRET_KEY_BASE=$(cat /app/.secret_key_base) && \
+    mix assets.setup && \
+    mix assets.deploy
 
 RUN printf '#!/bin/bash\n\
 set -e\n\
 \n\
-# Enable command tracing for debugging\n\
-set -x\n\
-\n\
 # Debug information\n\
 echo "=== Starting entrypoint script ==="\n\
 echo "Current directory: $(pwd)"\n\
-echo "Directory contents:"\n\
-ls -la\n\
 echo "Environment variables:"\n\
 env | grep -v "SECRET"\n\
 \n\
@@ -97,15 +106,23 @@ env | grep -v "SECRET"\n\
 export SECRET_KEY_BASE=$(cat /app/.secret_key_base)\n\
 echo "Secret key base is configured (length: ${#SECRET_KEY_BASE} bytes)"\n\
 \n\
-# Run migrations\n\
-echo "Running database migrations..."\n\
-mix ecto.migrate\n\
+# Make sure the uploads directory exists\n\
+mkdir -p /app/priv/static/uploads\n\
+\n\
+# Setup database directory\n\
+DBDIR=/app/priv/static/uploads\n\
+mkdir -p "$DBDIR"\n\
+chmod 777 "$DBDIR"\n\
+\n\
+# Setup the database (create if not exists)\n\
+echo "Setting up database..."\n\
+# Using ecto.setup instead of just migrate to ensure the DB is created\n\
+mix ecto.setup || (echo "Database setup failed, retrying with migrate only" && mix ecto.migrate)\n\
 \n\
 # Start Phoenix server in foreground\n\
-# Using exec ensures proper signal handling and process management\n\
 echo "Starting Phoenix server..."\n\
 exec mix phx.server\n\
-' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+'
 
 # Configure shell and entrypoint
 SHELL ["/bin/bash", "-c"]
