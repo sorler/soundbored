@@ -197,8 +197,10 @@ defmodule SoundboardWeb.AudioPlayer do
 
     # Don't use realtime flag for local files, it can cause issues
     # Only use realtime for streaming/URL sources
-    play_options = [volume: 1.0]
+    # Try higher volume to see if it's a volume issue
+    play_options = [volume: 2.0]
     Logger.info("Play options: #{inspect(play_options)}")
+    Logger.info("DEBUG: Voice channel users: #{inspect(get_voice_channel_users(guild_id))}")
 
     # Keep track of attempts
     play_with_retries(guild_id, play_input, play_type, play_options, sound_name, username, 0)
@@ -430,6 +432,21 @@ defmodule SoundboardWeb.AudioPlayer do
       "soundboard",
       {:error, message}
     )
+  end
+
+  defp get_voice_channel_users(guild_id) do
+    try do
+      alias Nostrum.Cache.GuildCache
+      case GuildCache.get(guild_id) do
+        {:ok, guild} ->
+          guild.voice_states
+          |> Enum.map(fn vs -> {vs.user_id, vs.channel_id} end)
+        _ ->
+          "Guild not found in cache"
+      end
+    rescue
+      error -> "Error getting voice users: #{inspect(error)}"
+    end
   end
 
   defp get_sound_path(sound_name) do
