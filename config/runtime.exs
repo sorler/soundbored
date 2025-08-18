@@ -21,8 +21,15 @@ if System.get_env("PHX_SERVER") do
 end
 
 if config_env() == :prod do
-  # Replace the database_url section with SQLite configuration
-  database_path = Path.join(:code.priv_dir(:soundboard), "static/uploads/soundboard_prod.db")
+  # Replace the database_url section with SQLite configuration  
+  # During build time, create a temporary path
+  database_path = 
+    if System.get_env("MIX_ENV") == "prod" and File.exists?("/app") do
+      Path.join(:code.priv_dir(:soundboard), "static/uploads/soundboard_prod.db")
+    else
+      # Fallback for build time
+      "/tmp/soundboard_build.db"
+    end
 
   config :soundboard, Soundboard.Repo,
     database: database_path,

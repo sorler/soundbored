@@ -48,7 +48,7 @@ defmodule SoundboardWeb.AudioPlayer do
   # Server Callbacks
   @impl true
   def init(_state) do
-    Logger.info(\"Initializing AudioPlayer...\")
+    Logger.info("Initializing AudioPlayer...")
     schedule_voice_check()
     {:ok, %State{voice_channel: nil, current_playback: nil}}
   end

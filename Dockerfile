@@ -78,11 +78,17 @@ RUN bash -c '\
 # Set build-time environment variables for compilation
 ENV PHX_HOST=localhost \
     SCHEME=http \
-    MIX_ENV=prod
+    MIX_ENV=prod \
+    DISCORD_TOKEN=dummy_build_token \
+    DISCORD_CLIENT_ID=dummy_build_id \
+    DISCORD_CLIENT_SECRET=dummy_build_secret
 
 # Compile the application without running database operations
 RUN export SECRET_KEY_BASE=$(cat /app/.secret_key_base) && \
     echo "SECRET_KEY_BASE length: ${#SECRET_KEY_BASE} bytes" && \
+    echo "Starting compilation..." && \
+    mkdir -p /tmp && \
+    mix deps.compile && \
     mix compile
 
 # Install Node.js for asset compilation
